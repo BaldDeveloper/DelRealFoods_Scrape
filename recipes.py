@@ -1,169 +1,287 @@
-import os
 import pandas as pd
-from selenium import webdriver
 from selenium.common import NoSuchElementException, StaleElementReferenceException
 from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
+from selenium import webdriver
+from selenium.webdriver.chrome.service import Service
 from webdriver_manager.chrome import ChromeDriverManager
+
 import tempfile
 import time
 
-def click_recipes_scrape():
+"""Complete."""
+
+def setup_driver():
+    """Set up and return a Chrome WebDriver instance."""
+    options = Options()
+    user_data_dir = tempfile.mkdtemp()
+    options.add_argument(f"--user-data-dir={user_data_dir}")
+    options.add_argument("--headless")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.page_load_strategy = 'normal'
+    service = Service(ChromeDriverManager().install())
+    return webdriver.Chrome(service=service, options=options)
+
+
+def scrape_product_details(driver, product_element, page_title, page_url, product_output):
+    """
+    Extract details of a single recipe product from its preview card.
+    Only processes specific allowed recipes defined in allowed_titles.
+    Extracts:
+    - Image URL
+    - Product title
+    - Product URL
+    - Review badge
+    Then navigates to product page for additional details.
+    """
     try:
-        # Set up the Chrome WebDriver with a unique user data directory and headless mode
-        options = Options()
-        user_data_dir = tempfile.mkdtemp()
-        options.add_argument(f"--user-data-dir={user_data_dir}")
-        options.add_argument("--headless")  # Run Chrome in headless mode
+        article_image = product_element.find_element(By.CLASS_NAME, "article-image")
+        article_img = article_image.find_element(By.TAG_NAME, "img")
+        article_img_url = article_img.get_attribute("src")
 
-        service = Service(ChromeDriverManager().install())
-        driver = webdriver.Chrome(service=service, options=options)
+        article_content = product_element.find_element(By.CLASS_NAME, "article-content")
+        article_anchor = article_content.find_element(By.TAG_NAME, "a")
+        article_anchor_url = article_anchor.get_attribute("href")
+        article_anchor_text = article_anchor.text
 
-        # Open the website
+        # List of allowed article_anchor_text values
+        allowed_titles = [
+            "Shredded Beef Crepes"
+        ]
+
+        # Process only if the article_anchor_text is in the allowed list
+        if article_anchor_text not in allowed_titles:
+            print(f"Skipping product: {article_anchor_text}")
+            return
+
+        if article_anchor_url.startswith("/"):
+            base_url = "https://delrealfoods.com"
+            article_anchor_url = base_url + article_anchor_url
+
+        try:
+            article_review_badge = product_element.find_element(By.CLASS_NAME, "stamped-badge")
+            article_review = article_review_badge.get_attribute("aria-label")
+        except NoSuchElementException:
+            article_review = "No review"
+
+        driver.get(article_anchor_url)
+        time.sleep(8)
+
+        ap_data = scrape_additional_data(driver,article_anchor_text)
+
+        # Create base product data
+        base_data = {
+            "Page Title": page_title,
+            "Page URL": page_url,
+            "Product Header": article_anchor_text,
+            "Product Review": article_review,
+            "Product Image URL": article_img_url,
+            "Product Anchor URL": article_anchor_url
+        }
+
+        # If ap_data is empty, append just the base data
+        if not ap_data:
+            product_output.append(base_data)
+        else:
+            # Merge base_data with ap_data and append
+            base_data.update(ap_data)
+            product_output.append(base_data)
+
+        print(f"Scraped data from {article_anchor_text}")
+
+        driver.back()
+        time.sleep(2)
+
+    except Exception as e:
+        print(f"Error scraping product details: {e}")
+
+
+def scrape_additional_data(driver,article_anchor_text):
+    """
+    Extract detailed recipe information from individual recipe pages.
+    Scrapes:
+    - Recipe heading
+    - Description
+    - Ingredients header and list
+    - Preparation header and steps
+    - PDF recipe URL
+    Returns data as dictionary.
+    """
+    ap_data = {}
+
+    # Get product item heading
+    try:
+        heading_elements = driver.find_elements(By.CLASS_NAME, "vc_custom_heading")
+        if len(heading_elements) >= 1:
+            product_item_heading = heading_elements[1].text
+            ap_data["Product Item Heading"] = product_item_heading
+    except NoSuchElementException:
+        print("Product item heading not found")
+
+    # Get product item description
+    if article_anchor_text == "Shredded Beef Crepes":
+        description_xpath = "//*[@id='shopify-section-recipe-article']/div[1]/div/article/div/section/div/div[2]/*/*/*/p"
+    else:
+        description_xpath = "//*[@id='shopify-section-recipe-article']/div[1]/div/article/div/section/div/div[2]/*/*/*/*/*/p"
+
+
+    try:
+        product_item_description = driver.find_element(By.XPATH, description_xpath).text
+        ap_data["Product Item Description"] = product_item_description
+    except NoSuchElementException:
+        try:
+            description_xpath = "//*[@id='shopify-section-recipe-article']/div[1]/div/article/div/section/div/div[2]/div/div/div[2]/p"
+            product_item_description = driver.find_element(By.XPATH, description_xpath).text
+            ap_data["Product Item Description"] = product_item_description
+        except NoSuchElementException:
+            print("Product item description not found")
+
+    # Get product item ingredients heading
+    try:
+        heading_elements = driver.find_elements(By.CLASS_NAME, "vc_custom_heading")
+        if len(heading_elements) >= 2:
+            product_item_ingredients = heading_elements[1].text
+            ap_data["Ingredients Header"] = product_item_ingredients
+    except NoSuchElementException:
+        print("Product item ingredients not found")
+
+    # Get product item ingredients list
+    try:
+        ingredients_ul = driver.find_element(By.CLASS_NAME, "dt-sc-fancy-list")
+        product_item_ingredient_list = [li.text for li in ingredients_ul.find_elements(By.TAG_NAME, "li")]
+        ap_data["Product Item Ingredient List"] = product_item_ingredient_list
+    except NoSuchElementException:
+        print("Product item ingredient list not found")
+
+    # Get product item preparation heading
+    try:
+        heading_elements = driver.find_elements(By.CLASS_NAME, "vc_custom_heading")
+        if len(heading_elements) >= 3:
+            product_item_preparation = heading_elements[2].text
+            ap_data["Product Item Preparation"] = product_item_preparation
+
+    except NoSuchElementException:
+        print("Product item preparation not found")
+
+    # Get product item preparation list
+    try:
+        preparation_elements = driver.find_elements(By.CSS_SELECTOR, ".wpb_text_column.wpb_content_element")
+        if len(preparation_elements) >= 2:
+            product_item_preparation_list = preparation_elements[1].text
+            ap_data["Product Item Preparation List"] = product_item_preparation_list
+        else:
+            product_item_preparation_list = preparation_elements[0].text
+            ap_data["Product Item Preparation List"] = product_item_preparation_list
+    except NoSuchElementException:
+        print("Product item preparation list not found")
+
+    # Get recipe PDF URL
+    try:
+        product_recipe_pdf_url = driver.find_element(By.CSS_SELECTOR, "a.pdf-print").get_attribute("href")
+        ap_data["Product Recipe PDF URL"] = product_recipe_pdf_url
+    except NoSuchElementException:
+        print("Product recipe PDF URL not found")
+
+    return ap_data
+
+
+def navigate_pages(driver, product_output):
+    """
+    Navigate through recipe listing pages using pagination.
+    For each page:
+    - Waits for recipe items to load
+    - Scrapes details of each recipe
+    - Clicks next page button if available
+    - Handles stale elements by retrying
+    """
+    page_title = driver.title
+    page_url = driver.current_url
+
+    while True:
+        try:
+            # Wait for recipe items to be present
+            wait = WebDriverWait(driver, 10)
+            recipe_items = wait.until(
+                EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".cust-blog.grid__item"))
+            )
+
+            i = 0
+            while i < len(recipe_items):
+                try:
+                    recipe_item = recipe_items[i]
+                    article_content = recipe_item.find_element(By.CLASS_NAME, "article")
+                    scrape_product_details(driver, article_content, page_title, page_url, product_output)
+
+                    # Refresh the recipe_items list
+                    recipe_items = driver.find_elements(By.CSS_SELECTOR, ".cust-blog.grid__item")
+                except StaleElementReferenceException:
+                    print("Stale element encountered. Re-locating the element.")
+                    continue
+                i += 1
+
+            # Check if next button exists and is enabled
+            next_buttons = driver.find_elements(By.XPATH, "//a[@class='enable-arrow' and @title='Next »']")
+            if not next_buttons:
+                print("No more pages to scrape.")
+                break
+
+            # Click the next button
+            next_button = next_buttons[0]
+            if not next_button.is_displayed() or not next_button.is_enabled():
+                print("Next button is not clickable. Ending pagination.")
+                break
+
+            driver.execute_script("arguments[0].click();", next_button)
+            time.sleep(4)
+
+        except Exception as e:
+            print(f"Error during pagination: {e}")
+            break
+
+
+def save_to_excel(product_output, output_file):
+    """Save scraped recipe data to Excel file at specified output path."""
+    try:
+        df = pd.DataFrame(product_output)
+        df.to_excel(output_file, index=False)
+        print(f"Data saved to {output_file}")
+    except Exception as e:
+        print(f"Error saving to Excel: {e}")
+
+
+def click_recipes_scrape():
+    """
+    Main execution function that:
+    - Initializes Chrome WebDriver
+    - Starts scraping from recipes page
+    - Collects all recipe data
+    - Saves results to Excel
+    - Cleans up browser instance
+    """
+    try:
+        driver = setup_driver()
         driver.get("https://delrealfoods.com/blogs/recipes")
-
-        # Get the page title, URL and Recipe Header
-        page_title = driver.title
-        page_url = driver.current_url
 
         # Initialize an array to store all products
         product_output = []
 
-        # Start Page Loop
-        while True:
-            # Find all elements with the class 'item-row'
-            recipe_products = driver.find_elements(By.CLASS_NAME, "item-row")
+        # Navigate and scrape pages
+        navigate_pages(driver, product_output)
 
-            recipe_products_count = 0
-            # Loop through all section groups
-            while recipe_products_count < len(recipe_products):
-                try:
-                    # Re-locate the product element to avoid stale references
-                    recipe_products = driver.find_elements(By.CLASS_NAME, "item-row")
-                    recipe_product = recipe_products[recipe_products_count]
-
-                    # Get the anchor URL and image URL
-                    article_image = recipe_product.find_element(By.CLASS_NAME, "article-image")
-                    article_img = article_image.find_element(By.TAG_NAME, "img")
-                    article_img_url = article_img.get_attribute("src")
-
-                    article_content = recipe_product.find_element(By.CLASS_NAME, "article-content")
-                    article_anchor = article_content.find_element(By.TAG_NAME, "a")
-                    article_anchor_url = article_anchor.get_attribute("href")
-                    article_anchor_text = article_anchor.text
-
-                    print(article_anchor_text)
-
-                    # Check if the URL is partial (starts with '/')
-                    if article_anchor_url.startswith("/"):
-                        base_url = "https://delrealfoods.com"  # Base URL of the website
-                        article_anchor_url = base_url + article_anchor_url
-                        # Update the href attribute of the article_anchor element using JavaScript
-                        driver.execute_script("arguments[0].setAttribute('href', arguments[1]);", article_anchor, article_anchor_url)
-
-                    # Check if the stamped-badge element exists
-                    try:
-                        article_review_badge = recipe_product.find_element(By.CLASS_NAME, "stamped-badge")
-                        article_review = article_review_badge.get_attribute("aria-label")
-                    except NoSuchElementException:
-                        article_review = "No review"
-
-                    # Navigate to the article page using the URL
-                    driver.get(article_anchor_url)
-
-                    # Initialize lists to store additional data
-                    ap_data = []
-
-                    # Find all elements on article page with the class 'wpb_wrapper'
-                    ap_main_content = driver.find_element(By.CLASS_NAME, "vc_section")
-                    ap_column_inners = ap_main_content.find_elements(By.CLASS_NAME, "vc_column-inner")
-                    for ap_column_inner in ap_column_inners:
-
-                        # Find all elements with the class 'vc_custom_heading' and grab their text
-                        ap_wpb_wrappers = ap_column_inner.find_elements(By.CLASS_NAME, "wpb_wrapper")
-                        for ap_wpb_wrapper in ap_wpb_wrappers:
-                            ap_data.append(ap_wpb_wrapper.text)
-
-                            # Initialize lists to store split data
-                            ingredients_data = []
-                            other_data = []
-
-                            # Split ap_data based on the keyword "INGREDIENTS"
-                            for data in ap_data:
-                                if "INGREDIENTS" in data:
-                                    parts = data.split("INGREDIENTS",
-                                                       1)  # Split into two parts at the first occurrence of "INGREDIENTS"
-                                    other_data.append(
-                                        parts[0].strip())  # Add the part before "INGREDIENTS" to other_data
-                                    ingredients_data.append(
-                                        parts[1].strip())  # Add the part after "INGREDIENTS" to ingredients_data
-                                else:
-                                    other_data.append(
-                                        data.strip())  # If "INGREDIENTS" is not found, add the data to other_data
-
-                            # Store the collected data in the output array
-                            product_output.append({
-                                "Count": recipe_products_count,
-                                "Page Title": page_title,
-                                "Page URL": page_url,
-                                "Product Header": article_anchor_text,
-                                "Product Review": article_review,
-                                "Product Image URL": article_img_url,
-                                "Product Anchor URL": article_anchor_url,
-                                "Other Data": other_data,
-                                "Ingredients": ingredients_data
-                            })
-
-                        # # Find all elements with the class 'wpb_text_column' and grab their text
-                        # text_column = ap_wpb_wrapper.find_element(By.CLASS_NAME, "wpb_text_column")
-                        # if text_column:
-                        #     ap_data.append(text_column.text)
-
-                        # ap_list_data = []
-                        # ap_list_items = driver.find_elements(By.CLASS_NAME, "dt-sc-fancy-list")
-                        # for ap_list_item in ap_list_items:
-                        #     ap_list_data.append(ap_list_item.text)
-                        #
-                        # ap_data.append(ap_list_data)
-
-                    # Return to the previous page
-                    driver.back()
-
-                    # Wait for the page to reload
-                    time.sleep(3)
-
-
-
-
-
-                except StaleElementReferenceException:
-                    # Handle stale element by re-locating the elements
-                    recipe_products = driver.find_elements(By.CLASS_NAME, "item-row")
-                    continue
-
-                # Increment the index
-                recipe_products_count += 1
-
-            # Check if there is a next page
-            try:
-                next_button = driver.find_element(By.XPATH, "//a[@class='enable-arrow' and @title='Next »']")
-                driver.execute_script("arguments[0].click();", next_button)
-                time.sleep(2)  # Wait for the next page to load
-            except (NoSuchElementException, StaleElementReferenceException):
-                break  # Exit the loop if there is no next page or element is stale
-        # End Page Loop
-
-        # Save the DataFrame to the C:\ directory
+        # Save the data to an Excel file
         output_file = "C:\\recipes_scrape_output.xlsx"
-        df = pd.DataFrame(product_output)
-        df.to_excel(output_file, index=False)
+        save_to_excel(product_output, output_file)
 
         # Close the browser
         driver.quit()
 
     except Exception as e:
-        print(f"Error occurred: {e}", flush=True)
+        print(f"Error occurred: {e}")
+
 
 # Call the function
 click_recipes_scrape()

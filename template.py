@@ -12,19 +12,20 @@ import tempfile
 import time
 
 
-def setup_driver():      
-      """Set up and return a Chrome WebDriver instance."""
-      options = Options()
-      user_data_dir = tempfile.mkdtemp()
-      options.add_argument(f"--user-data-dir={user_data_dir}")
-      options.add_argument("--headless")
-      options.add_argument("--disable-gpu")
-      options.add_argument("--no-sandbox")
-      options.add_argument("--disable-dev-shm-usage")
-      options.add_argument("--enable-unsafe-swiftshader")  # Add this line
-      options.page_load_strategy = 'normal'
-      service = Service(ChromeDriverManager().install())
-      return webdriver.Chrome(service=service, options=options)
+def setup_driver():
+    """Set up and return a Chrome WebDriver instance."""
+    options = Options()
+    user_data_dir = tempfile.mkdtemp()
+    options.add_argument(f"--user-data-dir={user_data_dir}")
+    options.add_argument("--headless")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--enable-unsafe-swiftshader")  # Add this line
+    options.page_load_strategy = 'normal'
+    service = Service(ChromeDriverManager().install())
+    return webdriver.Chrome(service=service, options=options)
+
 
 def navigate_pages(driver, product_output):
     page_title = driver.title
@@ -38,7 +39,7 @@ def navigate_pages(driver, product_output):
             wait = WebDriverWait(driver, 10)
             product_items = wait.until(
                 EC.presence_of_all_elements_located((By.CSS_SELECTOR, ".grid__item.item-row"))
-             )
+            )
 
             i = 0
             while True:
@@ -46,18 +47,18 @@ def navigate_pages(driver, product_output):
                 if i >= len(product_items):
                     break
 
-                product_item = product_items[i]  
+                product_item = product_items[i]
                 product_image = product_item.find_element(By.CSS_SELECTOR, ".featured-image.tgggg")
                 parent_element = product_image.find_element(By.XPATH, "..")
-                product_href = parent_element.get_attribute("href")               
+                product_href = parent_element.get_attribute("href")
                 product_title = product_image.get_attribute("alt")
 
-                   # Check if product_href is a full URL, if not append to base URL
+                # Check if product_href is a full URL, if not append to base URL
                 if product_href and not product_href.startswith('http'):
                     product_href = f'https://delrealfoods.com{product_href}'
 
                 navigate_to_detail_page(driver, detail_driver, product_title, product_href, product_output)
-               
+
                 print(f"Processing product item {product_title} ")
                 i += 1
 
@@ -146,7 +147,7 @@ def click_allproducts_scrape():
         save_to_excel(product_output, output_file)
 
         # Close the browser
-        driver.quit()       
+        driver.quit()
 
     except Exception as e:
         print(f"Error occurred: {e}")
